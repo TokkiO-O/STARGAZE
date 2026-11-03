@@ -1,0 +1,43 @@
+<div class="stargaze-settings">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b>STARGAZE · 星眸头像拼贴</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <button id="stargaze-theme-manager" type="button" class="menu_button">主题素材 · 自选安装</button>
+            <div class="stargaze-settings-intro">保留酒馆原生头像、名字和 token 信息，把头像变成拼贴版头。入口在魔法棒菜单，点一下直接进编辑器。<br>拼贴严格收在消息框内，不会压到别的消息；尺寸随聊天区宽度自动缩放，同一套模板手机和电脑都能用。<br>画布九种比例，从「标签条」到「长手幅」；改宽度时素材和头像的像素大小不变，画布只是变宽。<br>头像在画布上是一个虚线圈：按住头像就能拖动位置，右中手柄只改宽、下手柄只改高、右下角等比缩放、左下角挪取景；工具条只在指针靠近头像时出现。</div>
+            <label class="checkbox_label" for="stargaze-enabled">
+                <input id="stargaze-enabled" type="checkbox" />
+                <span>在聊天头像上显示拼贴</span>
+            </label>
+            <label for="stargaze-display-mode">显示范围</label>
+            <select id="stargaze-display-mode" class="text_pole">
+                <option value="all">所有角色消息</option>
+                <option value="latest">仅每位角色最后一条消息</option>
+            </select>
+            <label for="stargaze-scale">拼贴整体大小 <span id="stargaze-scale-value">100%</span></label>
+            <input id="stargaze-scale" type="range" min="0.6" max="2" step="0.05" value="1" />
+            <label for="stargaze-mobile-max">手机端每条消息最多画几个元素 <span id="stargaze-mobile-max-value">60</span></label>
+            <input id="stargaze-mobile-max" type="range" min="20" max="160" step="5" value="60" />
+            <div class="stargaze-settings-note">手机上元素太多会卡，超过这个数就按「面积 × 类型权重」挑最显眼的留下，角落的小碎屑先省掉。电脑端不受影响。</div>
+            <label class="checkbox_label" for="stargaze-autosave">
+                <input id="stargaze-autosave" type="checkbox" />
+                <span>编辑器自动保存</span>
+            </label>
+            <label class="checkbox_label" for="stargaze-floating">
+                <input id="stargaze-floating" type="checkbox" />
+                <span>显示可拖动悬浮窗</span>
+            </label>
+            <label class="checkbox_label" for="stargaze-lazy">
+                <input id="stargaze-lazy" type="checkbox" />
+                <span>长聊天只渲染视口附近的拼贴（滚动更稳）</span>
+            </label>
+            <label class="checkbox_label" for="stargaze-animations">
+                <input id="stargaze-animations" type="checkbox" />
+                <span>轻动画：拼贴上偶尔扫过一道很淡的高光（默认关）</span>
+            </label>
+            <div id="stargaze-storage-status" class="stargaze-storage-status">正在读取独立存储…</div>
+        </div>
+    </div>
+</div>
