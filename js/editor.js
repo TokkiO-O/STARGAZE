@@ -68,6 +68,7 @@ import { renderCollage, renderCollageBlob } from './exporter.js';
 import {themePackages} from './packages/manager.js';
 import {openPackagePanel} from './editor/package-panel.js';
 import {assetUrl} from './assets/url.js';
+import {PREVIEW_AVATAR,stockPreview} from './preview-avatar.js';
 import {editorElement,patchEditorStage} from './editor/scene-view.js';
 import {openStoragePanel} from './editor/storage-panel.js';
 import {openTemplateUpdate,restoreTemplateCheckpoint} from './editor/template-update.js';
@@ -187,6 +188,13 @@ export class StarEditor {
         await Promise.all([this.refreshAssets(), this.refreshCustomTemplates()]);
         this.renderAll();
         this.renderTemplatePreviews();
+        const packages=themePackages();
+        this.packageSubscription=packages?.onChange(()=>{
+            if(this.closed||!this.overlay?.isConnected||packages.operations.size||packages.imports.size)return;
+            if(this.packageResultTime===packages.lastResult?.time)return;
+            this.packageResultTime=packages.lastResult?.time;
+            this.renderAssets();this.renderTemplatePreviews();this.renderAll();
+        });
         await refreshStudioTray(this);
         this.setMobileTab(this.mobileTab);
         this._openBarTimer = setTimeout(() => {
@@ -380,7 +388,7 @@ export class StarEditor {
                 const config = createConfig('preview', 'STARGAZE', template.id, template.layout);
                 preview.style.setProperty('--ar', String(config.canvas.width / config.canvas.height));
                 if (!config.elements.length) { preview.textContent = '＋ 自由创作'; return; }
-                const canvas = await renderCollage(config, { avatarUrl: this.avatarUrl, quality: .16 });
+                const canvas = await renderCollage(stockPreview(config), { avatarUrl: PREVIEW_AVATAR, quality: .16 });
                 if (this.closed || generation !== this.previewGeneration) return;
                 preview.replaceChildren(canvas);
             }).catch(error => console.warn('[STARGAZE] 缩略图暂不可用', error));
@@ -4282,6 +4290,7 @@ export class StarEditor {
         if (this.dirty && !autoSave && !confirm('还有未保存的修改，确定关闭吗？')) return;
         if (this.dirty && autoSave && !(await this.save())) return;
         this.closed = true;
+        this.packageSubscription?.();
         for(const dialog of [...(this.childDialogs||[])])dialog.close();
         this.previewGeneration++;
         this.previewObserver?.disconnect();

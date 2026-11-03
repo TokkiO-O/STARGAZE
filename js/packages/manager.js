@@ -4,7 +4,7 @@ import {registerAssetLoader} from '../asset-loader.js';
 import {assetsChanged} from '../assets/runtime.js';
 import {referencedAssets} from '../config-data.js';
 import {sha256,base64Bytes,abortCheck} from './integrity.js';
-import {TavernFiles,releaseSource,readBytes} from './source.js';
+import {TavernFiles,releaseSource,readBytes,OFFICIAL_SOURCE,DEFAULT_INDEX_PATH,managedFilePath,managedFileUrl} from './source.js';
 
 const EMPTY='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" fill="#ebe7df"/><path d="M4 24L13 13 19 20 24 16 29 24Z" fill="#c0b9ae"/></svg>');
 const INDEX_KEY='stargaze-theme-index',SOURCE_KEY='stargaze-theme-source';
@@ -16,21 +16,26 @@ export function prettyBytes(bytes){return bytes>=1e6?(bytes/1e6).toFixed(1)+' MB
 
 /** 安装器只处理用户选中的主题；共享图片按内容校验和存一份，安装成功后才切换索引。 */
 export class ThemePackages{
- constructor({store,context=null,offline=false}){
+ constructor({store,context=null,offline=false,notify=null}){
   this.store=store;this.context=context;this.offline=offline;this.server=!!context&&!offline;
   this.files=this.server?new TavernFiles(context):null;this.index={key:INDEX_KEY,format:1,themes:{},materials:{}};
-  this.urls=new Map();this.operations=new Map();this.listeners=new Set();this.source='';this.remote=null;this.legacy=false;this.mutation=Promise.resolve();this.destroyed=false;
+  this.urls=new Map();this.operations=new Map();this.imports=new Map();this.results=new Map();this.lastResult=null;this.notify=notify;
+  this.listeners=new Set();this.source=OFFICIAL_SOURCE;this.remote=null;this.legacy=false;this.mutation=Promise.resolve();this.destroyed=false;
  }
  async init(){
   // 启动只恢复已安装索引；下载操作只能由用户点选主题触发。
   current=this;const local=await this.store.get('configs',INDEX_KEY);
-  const url=this.context?.extensionSettings?.STARGAZE?.themeIndexUrl||'/files/stargaze-theme-index.json';
   let saved=local;
-  if(this.server&&url&&/^\/?files\/stargaze-[a-z0-9_.-]+$/i.test(url)){
-   try{const r=await fetch('/'+url.replace(/^\//,''),{credentials:'same-origin'});if(r.ok)saved=await r.json();}catch{}
+  if(this.server){
+   const candidates=[this.context?.extensionSettings?.STARGAZE?.themeIndexUrl,DEFAULT_INDEX_PATH,'files/stargaze-theme-index.json'].map(managedFilePath).filter(Boolean);
+   for(const path of new Set(candidates))try{
+    const r=await fetch(managedFileUrl(path),{credentials:'same-origin',cache:'no-store'});if(!r.ok)continue;
+    const index=await r.json();if(index?.format===1&&index.themes&&index.materials){saved=index;break;}
+   }catch{}
   }
   if(saved?.format===1&&saved.themes&&saved.materials)this.index=saved;
-  this.source=(await this.store.get('configs',SOURCE_KEY))?.value||this.context?.extensionSettings?.STARGAZE?.themeSource||'';
+  // 公开版本固定连接本项目，旧下载源设置不再影响安装。
+  this.source=OFFICIAL_SOURCE;
   for(const a of BUILTIN_ASSETS)if(a.url&&!/^(data:|blob:)/.test(a.url)){
    a.originalUrl ||= a.url;a.available=false;a.url=EMPTY;
    const meta=materialById.get(a.id);if(meta){a.themeIds=meta.themes;a.kind=meta.kind;a.color=meta.color;a.packageManaged=true;}
@@ -44,7 +49,13 @@ export class ThemePackages{
   await this.applyIndex();registerAssetLoader(ids=>this.ensure(ids));return this;
  }
  onChange(listener){this.listeners.add(listener);return ()=>this.listeners.delete(listener);}
- emit(){if(!this.destroyed)for(const listener of this.listeners)listener(this);}
+ emit(){if(!this.destroyed)for(const listener of this.listeners)try{listener(this);}catch(error){console.warn('[STARGAZE] 安装状态界面刷新失败',error);}}
+ report(id,error=null){
+  const name=THEME_CATALOG.find(t=>t.id===id)?.name||'本地主题',cancelled=error?.name==='AbortError';
+  const result={id,ok:!error,cancelled,time:Date.now(),message:error?(cancelled?'已取消安装，原有主题保留':error.message):`「${name}」安装完成，可使用九个尺寸`};
+  this.results.set(id,result);this.lastResult=result;
+  if(!this.destroyed)try{this.notify?.(result.message);}catch{}
+ }
  status(id){return this.index.themes[id]||null;}
  ready(id){return id==='free'||!!this.status(id)||this.legacy;}
  available(id){const a=BUILTIN_MAP.get(id);return !a||a.available!==false;}
@@ -55,8 +66,8 @@ export class ThemePackages{
   for(const [hash,record] of Object.entries(this.index.materials)){
    let url=record.url;
    if(record.localId){const asset=await this.store.getAsset(record.localId);if(this.destroyed)return;if(!asset?.blob)continue;url=this.urls.get(hash);if(!url){url=URL.createObjectURL(asset.blob);this.urls.set(hash,url);}}
-   if(!url||(!/^(blob:|data:image\/|\/?files\/stargaze-)/.test(url)))continue;
-   if(/^files\//.test(url))url='/'+url;
+   if(!url)continue;
+   if(!/^(blob:|data:image\/)/.test(url)){url=managedFileUrl(url);if(!url)continue;}
    for(const id of record.ids){const a=BUILTIN_MAP.get(id);if(a){a.url=url;a.available=true;a.materialHash=hash;const meta=materialById.get(id);if(meta){a.themeIds=meta.themes;a.kind=meta.kind;a.color=meta.color;}}}
   }
   for(const [hash,url] of this.urls)if(!this.index.materials[hash]){URL.revokeObjectURL(url);this.urls.delete(hash);}
@@ -77,7 +88,7 @@ export class ThemePackages{
  async installRemote(id){
   // 校验目录、主题清单、共享分片和图片，任何一步失败都不切换旧主题。
   if(this.operations.has(id))throw new Error('这个主题正在安装');
-  const op={controller:new AbortController(),done:0,total:0,phase:'连接下载源'};this.operations.set(id,op);this.emit();
+  const op={controller:new AbortController(),done:0,total:0,phase:'连接官方仓库'};this.results.delete(id);this.operations.set(id,op);this.emit();
   try{
    const remote=this.remote||await this.checkSource(op.controller.signal);
    const theme=remote.catalog.themes.find(t=>t.id===id);if(!theme)throw new Error('该发布中没有这个主题');
@@ -96,17 +107,25 @@ export class ThemePackages{
     }
     const row=chunks.get(bundle.sha256).find(row=>row.sha256===a.sha256);if(!row)throw new Error('素材分片中缺少图片');return base64Bytes(row.data);
    }});
-  }finally{this.operations.delete(id);this.emit();}
+   this.report(id);return id;
+  }catch(error){this.report(id,error);throw error;}
+  finally{this.operations.delete(id);this.emit();}
  }
  async importFile(file){
-  if(file.size>96*1024*1024)throw new Error('素材包超过 96 MB，请按主题分别导入');
-  const pack=JSON.parse(await file.text());this.validate(pack);
-  if(this.operations.has(pack.themeId))throw new Error('这个主题正在安装');
-  const op={controller:new AbortController(),done:0,total:0,phase:'读取本地主题'};this.operations.set(pack.themeId,op);this.emit();
-  try{await this.install(pack,{op,load:async a=>{
+  // 文件读取与安装都归管理器所有；关闭任意界面只退订显示，不终止任务。
+  const token=Symbol('local-import'),op={controller:new AbortController(),done:0,total:0,phase:'读取本地主题',name:file.name};
+  this.imports.set(token,op);this.emit();let id=null;
+  try{
+   if(file.size>96*1024*1024)throw new Error('素材包超过 96 MB，请按主题分别导入');
+   const pack=JSON.parse(await file.text());abortCheck(op.controller.signal);this.validate(pack);
+   if(this.operations.has(pack.themeId))throw new Error('这个主题正在安装');
+   id=pack.themeId;this.results.delete(id);this.imports.delete(token);this.operations.set(id,op);this.emit();
+   await this.install(pack,{op,load:async a=>{
    const match=String(a.dataUrl||'').match(/^data:(image\/(?:webp|png|jpeg));base64,([A-Za-z0-9+/=\s]+)$/);
    if(!match)throw new Error('本地主题包中缺少图片数据');return base64Bytes(match[2]);
-  }});return pack.themeId;}finally{this.operations.delete(pack.themeId);this.emit();}
+   }});this.report(id);return id;
+  }catch(error){this.report(id||'import',error);throw error;}
+  finally{this.imports.delete(token);if(id)this.operations.delete(id);this.emit();}
  }
  validate(pack){
   // 素材包仅提供已知图片编号，不执行包内代码或覆盖用户自己的稿件。
@@ -147,7 +166,7 @@ export class ThemePackages{
   }
   // 安装提交串行化；两个主题同时下载也只保存一份共享文件。
   const commit=async()=>{
-   abortCheck(signal);op.phase='保存主题';this.emit();const next=clone(this.index),created=[];
+   abortCheck(signal);op.phase='保存主题';op.done=0;this.emit();const next=clone(this.index),created=[];
    let committed=false;
    try{
     for(const {meta:a,bytes} of staged){
@@ -156,7 +175,7 @@ export class ThemePackages{
      let record={hash:a.sha256,ids:[...new Set([...(previous?.ids||[]),...a.ids])],bytes:a.bytes,mime:a.mime,name:a.name};
      if(this.server){record.url=await this.files.save('stargaze-'+a.sha256+'.webp',bytes,signal);if(!previous)created.push({server:record.url});}
      else{record.localId='stargaze-package-'+a.sha256;await this.store.put('assets',{id:record.localId,ownerKey:'__theme_packages__',blob:new Blob([bytes],{type:a.mime}),name:a.name,type:a.mime,createdAt:Date.now()});if(!previous)created.push({local:record.localId});}
-     next.materials[a.sha256]=record;
+     next.materials[a.sha256]=record;op.done++;this.emit();
     }
     for(const a of pack.materials){const r=next.materials[a.sha256];if(!r)throw new Error('共享素材未保存');r.ids=[...new Set([...r.ids,...a.ids])];}
     next.themes[pack.themeId]={id:pack.themeId,name:pack.name,revision:pack.revision,hashes:[...new Set(pack.materials.map(a=>a.sha256))],installedAt:Date.now(),sizes:9};
@@ -205,5 +224,5 @@ export class ThemePackages{
   };
   const result=this.mutation.then(run,run);this.mutation=result.catch(()=>{});return result;
  }
- destroy(){this.destroyed=true;for(const op of this.operations.values())op.controller.abort();for(const url of this.urls.values())URL.revokeObjectURL(url);this.urls.clear();this.listeners.clear();if(current===this){current=null;registerAssetLoader(null);}}
+ destroy(){this.destroyed=true;for(const op of [...this.operations.values(),...this.imports.values()])op.controller.abort();for(const url of this.urls.values())URL.revokeObjectURL(url);this.urls.clear();this.listeners.clear();if(current===this){current=null;registerAssetLoader(null);}}
 }

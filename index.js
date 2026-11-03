@@ -222,7 +222,7 @@ async function initializeOnce() {
     }
     const context = SillyTavern.getContext();
     store = await new StarStore().init();
-    packageManager=await new ThemePackages({store,context}).init();
+    packageManager=await new ThemePackages({store,context,notify}).init();
     renderer = new ChatRenderer(() => SillyTavern.getContext(), store);
     floating = new StargazeFloating({
         getContext: () => SillyTavern.getContext(),

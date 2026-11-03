@@ -1,5 +1,6 @@
 import {BUILTIN_MAP,CANVAS_PRESETS,LAYOUTS,isElementHidden} from '../templates.js';
 import {themePackages} from '../packages/manager.js';
+import {managedFilePath} from '../packages/source.js';
 import {studioDialog,status,esc} from './views.js';
 
 async function readableImage(blob){
@@ -38,7 +39,7 @@ export async function inspectDrafts(editor,{all=false}={}){
   if(hidden)add('info',layout,'',`有 ${hidden} 个隐藏图层，本次导出不会显示`);
   const empty=(config.groups||[]).filter(g=>!groups.has(g.id));if(empty.length)add('info',layout,'',`有 ${empty.length} 个空文件夹，可按需要整理`);
  }
- const files=themePackages()?.files,urls=[...new Set([...assets.values()].map(a=>a.url).filter(u=>/^\/?files\/stargaze-/.test(u||'')))];
+ const files=themePackages()?.files,urls=[...new Set([...assets.values()].map(a=>a.url).filter(managedFilePath))];
  if(files&&urls.length){try{const verified=await files.verify(urls);for(const [id,a] of assets)if(verified[a.url]===false)for(const {layout,config} of variants)for(const e of config.elements)if(e.assetId===id&&!isElementHidden(config,e))add('error',layout,e.id,'酒馆中的素材文件已丢失，请重新校验安装主题');}catch{serverWarning=true;}}
  if(serverWarning)add('info',variants[0].layout,'','暂时无法连接酒馆检查素材文件，导出时仍会尝试读取');
  return issues;

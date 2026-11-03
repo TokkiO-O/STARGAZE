@@ -1,4 +1,5 @@
 import {normalizeMetadata} from './template-meta.js';
+import {PREVIEW_AVATAR} from './preview-avatar.js';
 import {normalizeTone} from './photo-tone.js';
 import { V10_ASSETS } from './scenes-assets.js';
 import { imageCrop } from './image-crop.js';
@@ -10,16 +11,7 @@ export const CONFIG_VERSION = 9;
 // 极繁模板需要保留完整图层；规范化、迁移和尺寸草稿统一使用同一上限。
 export const MAX_ELEMENTS = 480;
 
-export const AVATAR_PLACEHOLDER = 'data:image/svg+xml,' + encodeURIComponent(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
-        <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stop-color="#f3eef8"/><stop offset="1" stop-color="#e3d9ef"/>
-        </linearGradient></defs>
-        <rect width="256" height="256" fill="url(#g)"/>
-        <circle cx="128" cy="104" r="46" fill="#cdc2dc"/>
-        <ellipse cx="128" cy="212" rx="70" ry="46" fill="#cdc2dc"/>
-    </svg>`,
-);
+export const AVATAR_PLACEHOLDER = PREVIEW_AVATAR;
 
 export function avatarUnits(canvas) {
     const scale = Number(canvas?.avatarScale) || 5;

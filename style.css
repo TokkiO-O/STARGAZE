@@ -1940,3 +1940,8 @@ body.stargaze-editor-open { overflow: hidden !important; }
 
 /* 仅对明确声明的素材、组合和图层开放拖放；其余画布元素仍由编辑手柄操作。 */
 .stargaze-editor.star-no-native-select [data-asset-drag][draggable="true"],.stargaze-editor.star-no-native-select [data-studio-combination][draggable="true"],.stargaze-editor.star-no-native-select .star-layer-row[draggable="true"]{-webkit-user-drag:element}
+
+/* 安装任务在窗口外继续运行，卡片只显示管理器的实时状态。 */
+.star-package-card progress{width:100%;height:6px;accent-color:#9276a5}
+.star-package-card .star-package-error{color:#a23949;overflow-wrap:anywhere}
+.star-package-card[data-installed="true"] [data-pkg-state]{color:#357052}
