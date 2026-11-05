@@ -1,6 +1,7 @@
 import {bytesBase64,abortCheck} from './integrity.js';
 
 export const OFFICIAL_SOURCE='TokkiO-O/STARGAZE';
+export const OFFICIAL_MATERIAL_BASE='https://raw.githubusercontent.com/TokkiO-O/STARGAZE/stargaze-materials/';
 export const DEFAULT_INDEX_PATH='user/files/stargaze-theme-index.json';
 
 /** 酒馆返回相对用户根目录的 user/files 路径；同时识别早期扩展的 files 路径。 */
@@ -30,7 +31,7 @@ export class TavernFiles{
  }
  async post(route,body,signal){
   abortCheck(signal);const response=await fetch(route,{method:'POST',credentials:'same-origin',headers:await this.headers(),body:JSON.stringify(body),signal});
-  if(!response.ok){const detail=(await response.text()).replace(/<[^>]*>/g,' ').trim().slice(0,160);throw new Error(`酒馆文件操作失败（${response.status}）${detail?'：'+detail:''}`);}
+  if(!response.ok){const detail=(await response.text()).replace(/<[^>]*>/g,' ').trim().slice(0,160),error=new Error(`酒馆文件操作失败（${response.status}）${detail?'：'+detail:''}`);error.status=response.status;error.route=route;throw error;}
   return response;
  }
  async save(name,bytes,signal){
@@ -82,7 +83,7 @@ export async function readBytes(url,{signal,limit=64*1024*1024,onProgress,tavern
  catch(error){
   abortCheck(signal);if(!tavern||error.sizeLimit)throw error;
   try{bytes=await timed(signal,60000,proxySignal=>tavern.download(url,proxySignal));}
-  catch(proxyError){abortCheck(signal);throw new Error(`素材下载未完成，请重试或导入本地主题包。${proxyError.message}`);}
+  catch(proxyError){abortCheck(signal);if(proxyError.status===404)throw new Error('酒馆未允许这个素材下载地址，可先导入本地主题包');throw new Error(`素材下载未完成，请重试或导入本地主题包。${proxyError.message}`);}
   if(bytes.length>limit)throw new Error('下载文件超过允许大小');onProgress?.(bytes.length,bytes.length);
  }
  if(redirects<3&&bytes.length&&bytes[0]===123){
@@ -95,6 +96,12 @@ export async function readBytes(url,{signal,limit=64*1024*1024,onProgress,tavern
 export async function releaseSource(input=OFFICIAL_SOURCE,options={}){
  const source=parseSource(input);
  if(source.kind==='directory')return {file:name=>new URL(name,source.base).href,label:source.base};
+ // 官方素材以浏览器可读的独立分支发布：避开 Release 跳转跨域和酒馆域名白名单差异。
+ // 酒馆浅克隆默认代码分支，不会把整套素材带进核心扩展。
+ if(source.owner.toLowerCase()==='tokkio-o'&&source.repo.toLowerCase()==='stargaze')return {label:'官方主题素材',file:name=>{
+  if(!/^[a-z0-9][a-z0-9_.-]*$/i.test(name)||name.includes('..'))throw new Error('素材文件名无效');
+  return new URL(name,OFFICIAL_MATERIAL_BASE).href;
+ }};
  const url=`https://api.github.com/repos/${source.owner}/${source.repo}/releases?per_page=5`;
  const bytes=await readBytes(url,{...options,limit:2*1024*1024}),releases=JSON.parse(new TextDecoder().decode(bytes));
  const release=(Array.isArray(releases)?releases:[releases]).find(r=>!r.draft&&r.assets?.some(a=>a.name==='stargaze-catalog.json'));

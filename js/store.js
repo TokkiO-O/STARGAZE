@@ -5,7 +5,6 @@ import { prepareAssets } from './asset-loader.js';
 import { APP_VERSION } from './version.js';
 
 const DB_NAME = 'stargaze-independent-store';
-const DB_VERSION = 1;
 const STORES = ['configs', 'assets', 'templates'];
 
 export const LIBRARY_OWNER = '__library__';
@@ -81,6 +80,7 @@ export class StarStore {
         this.memory = Object.fromEntries(STORES.map(name => [name, new Map()]));
 
         this.configCache = new Map();
+        this.opening = null;
     }
 
     async init() {
@@ -89,32 +89,86 @@ export class StarStore {
             return this;
         }
         try {
-            this.db = await new Promise((resolve, reject) => {
-                const request = indexedDB.open(DB_NAME, DB_VERSION);
-                request.onupgradeneeded = () => {
-                    const db = request.result;
-                    if (!db.objectStoreNames.contains('configs')) db.createObjectStore('configs', { keyPath: 'key' });
-                    if (!db.objectStoreNames.contains('assets')) db.createObjectStore('assets', { keyPath: 'id' });
-                    if (!db.objectStoreNames.contains('templates')) db.createObjectStore('templates', { keyPath: 'id' });
-                };
-                request.onsuccess = () => resolve(request.result);
-                request.onerror = () => reject(request.error || new Error('IndexedDB 打开失败'));
-                request.onblocked = () => reject(new Error('IndexedDB 被其他页面阻塞，请关闭旧版编辑器后重试'));
-            });
-            this.db.onversionchange = () => this.db.close();
-            this.persistent = true;
-            this.storageMode = 'indexedDB';
+            await this.connect();
         } catch (error) {
+            // 已有数据库断开时保留原存储后端，不以空白临时数据代替用户稿件。
+            if (this.persistent) throw error;
             this.error = `独立存储不可用：${error.message}。本次只能临时使用。`;
             console.warn('[STARGAZE]', error);
         }
         return this;
     }
 
+    invalidateConnection(db) {
+        if (this.db !== db) return;
+        this.db = null;
+        this.configCache.clear();
+    }
+
+    /** 多个读写共用一次重连；不指定旧版本号，兼容其他页面已完成的数据库升级。 */
+    async connect() {
+        if (this.db) return this.db;
+        if (this.opening) return this.opening;
+        const opening = (async () => {
+            const db = await new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME);
+                let settled = false;
+                request.onupgradeneeded = () => {
+                    const db = request.result;
+                    if (!db.objectStoreNames.contains('configs')) db.createObjectStore('configs', { keyPath: 'key' });
+                    if (!db.objectStoreNames.contains('assets')) db.createObjectStore('assets', { keyPath: 'id' });
+                    if (!db.objectStoreNames.contains('templates')) db.createObjectStore('templates', { keyPath: 'id' });
+                };
+                request.onsuccess = () => {
+                    if (settled) { request.result.close(); return; }
+                    settled = true; resolve(request.result);
+                };
+                const fail = error => { if (!settled) { settled = true; reject(error); } };
+                request.onerror = () => fail(request.error || new Error('IndexedDB 打开失败'));
+                request.onblocked = () => fail(new Error('本地数据库正在被其他页面使用，请稍后重试'));
+            });
+            // 必须捕获本次连接；旧连接的事件不能关闭重连后得到的新连接。
+            db.onversionchange = () => { this.invalidateConnection(db); db.close(); };
+            db.onclose = () => this.invalidateConnection(db);
+            this.db = db;
+            this.persistent = true;
+            this.storageMode = 'indexedDB';
+            this.error = null;
+            this.configCache.clear();
+            return db;
+        })();
+        this.opening = opening;
+        try { return await opening; }
+        finally { if (this.opening === opening) this.opening = null; }
+    }
+
+    /** 只重试尚未创建事务的失效连接，已提交的写入不会重复执行。 */
+    async withObjectStore(storeName, mode, operation) {
+        for (let attempt = 0; attempt < 2; attempt++) {
+            const db = await this.connect();
+            let transaction;
+            try { transaction = db.transaction(storeName, mode); }
+            catch (error) {
+                if (attempt === 0 && error.name === 'InvalidStateError') {
+                    this.invalidateConnection(db); db.close(); continue;
+                }
+                throw error;
+            }
+            const done = transactionDone(transaction);
+            let request;
+            try { request = operation(transaction.objectStore(storeName)); }
+            catch (error) {
+                try { transaction.abort(); } catch {}
+                await done.catch(() => {}); throw error;
+            }
+            const [result] = await Promise.all([requestResult(request), done]);
+            return result;
+        }
+    }
+
     async get(storeName, key) {
         if (!this.persistent) return clone(this.memory[storeName].get(key) || null);
-        const transaction = this.db.transaction(storeName, 'readonly');
-        return (await requestResult(transaction.objectStore(storeName).get(key))) || null;
+        return (await this.withObjectStore(storeName, 'readonly', store => store.get(key))) || null;
     }
 
     async put(storeName, value) {
@@ -124,9 +178,7 @@ export class StarStore {
             this.memory[storeName].set(key, copy);
             return copy;
         }
-        const transaction = this.db.transaction(storeName, 'readwrite');
-        const done = transactionDone(transaction);
-        await Promise.all([requestResult(transaction.objectStore(storeName).put(copy)), done]);
+        await this.withObjectStore(storeName, 'readwrite', store => store.put(copy));
         return copy;
     }
 
@@ -135,15 +187,12 @@ export class StarStore {
             this.memory[storeName].delete(key);
             return;
         }
-        const transaction = this.db.transaction(storeName, 'readwrite');
-        const done = transactionDone(transaction);
-        await Promise.all([requestResult(transaction.objectStore(storeName).delete(key)), done]);
+        await this.withObjectStore(storeName, 'readwrite', store => store.delete(key));
     }
 
     async getAll(storeName) {
         if (!this.persistent) return clone([...this.memory[storeName].values()]);
-        const transaction = this.db.transaction(storeName, 'readonly');
-        return await requestResult(transaction.objectStore(storeName).getAll());
+        return await this.withObjectStore(storeName, 'readonly', store => store.getAll());
     }
 
     async getGlobal() {
